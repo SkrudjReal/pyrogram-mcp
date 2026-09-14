@@ -56,7 +56,11 @@ def register(mcp: FastMCP) -> None:
         limit: int = 20,
         offset_id: int = 0,
     ) -> dict[str, Any]:
-        """Read specific messages or recent history from a chat."""
+        """Read up to 100 messages. Batch known IDs in message_ids.
+
+        For older history, pass the smallest returned ID as offset_id (exclusive).
+        Use search_messages with from_user to find an author's messages efficiently.
+        """
         return await safe(
             "get_messages",
             lambda: _json(
@@ -72,14 +76,22 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(title="Search messages in chat", annotations=read, structured_output=True)
     async def search_messages(
-        chat_id: int | str, query: str, limit: int = 20
+        chat_id: int | str, query: str = "", limit: int = 20,
+        from_user: int | str | None = None, offset: int = 0,
+        min_id: int = 0, max_id: int = 0,
     ) -> dict[str, Any]:
-        """Search text and media captions in one chat."""
+        """Server-side search, up to 100 results. from_user='me' finds own messages.
+
+        Empty query allows author-only search. min_id/max_id are exclusive bounds.
+        Page older results with max_id=min(returned IDs), preserving all filters;
+        stop on an empty page. offset is a result offset, not a message ID.
+        """
         return await safe(
             "search_messages",
             lambda: _json(
                 telegram.search_messages(
-                    get_runtime().client, chat_id, query, limit=limit
+                    get_runtime().client, chat_id, query, limit=limit,
+                    from_user=from_user, offset=offset, min_id=min_id, max_id=max_id,
                 )
             ),
         )

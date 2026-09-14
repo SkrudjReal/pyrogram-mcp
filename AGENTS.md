@@ -43,10 +43,18 @@ the generated Kurigram raw classes into this project.
   project-specific so native rollouts are isolated from VS Code; reuse an
   existing login through a symlink rather than copying credentials. Do not
   replace it with a new `codex exec` process per message.
+- `core/prompts/codex.md` is the canonical Codex developer prompt. Keep it
+  limited to operational rules and Telegram HTML formatting; do not copy
+  persona, voice, stickers or Premium Emoji rules into it.
+- Codex output passes through `core/telegram/formatting.py` before Telegram
+  delivery; keep Markdown-to-HTML conversion and message chunking there.
 - Codex approval handling is automatic review in a workspace-write sandbox;
   do not silently change it to an unrestricted policy.
 
 ## Command reference
+
+- `KURIGRAM_API.md` lists public high-level Client methods from the installed
+  library. Consult it before choosing raw API; verify signatures with client_describe.
 
 - `COMMANDS.md` is the canonical user-facing Telegram command reference.
 - If the owner asks to show commands, the command list or help, read

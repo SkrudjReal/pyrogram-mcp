@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pyrogram.types import ReplyParameters
+
 from core.telegram.resolve import chat_id, clamp_limit, message_ids
 
 
@@ -38,20 +40,26 @@ async def get_messages(
     target = chat_id(target)
     if ids is not None:
         return await client.get_messages(target, message_ids(ids))
+    if offset_id == 1:
+        return []
     result = []
     async for message in client.get_chat_history(
-        target, limit=clamp_limit(limit), offset_id=max(offset_id, 0)
+        target, limit=clamp_limit(limit), max_id=max(offset_id - 1, 0)
     ):
         result.append(message)
     return result
 
 
 async def search_messages(
-    client: Any, target: int | str, query: str, *, limit: int = 20
+    client: Any, target: int | str, query: str, *, limit: int = 20,
+    from_user: int | str | None = None, offset: int = 0,
+    min_id: int = 0, max_id: int = 0,
 ) -> list[Any]:
     result = []
     async for message in client.search_messages(
-        chat_id(target), query=query, limit=clamp_limit(limit)
+        chat_id(target), query=query, limit=clamp_limit(limit),
+        from_user=chat_id(from_user) if from_user is not None else None,
+        offset=max(0, offset), min_id=max(0, min_id), max_id=max(0, max_id),
     ):
         result.append(message)
     return result
@@ -86,7 +94,10 @@ async def send_message(
     return await client.send_message(
         chat_id(target),
         text,
-        reply_to_message_id=reply_to_message_id,
+        reply_parameters=(
+            ReplyParameters(message_id=reply_to_message_id)
+            if reply_to_message_id is not None else None
+        ),
         message_thread_id=message_thread_id,
         disable_notification=disable_notification,
     )
@@ -140,7 +151,7 @@ async def get_message_context(
     size = clamp_limit(context_size, default=10, maximum=50)
     result = []
     async for message in client.get_chat_history(
-        chat_id(target), limit=(size * 2) + 1, offset_id=message_id + size
+        chat_id(target), limit=(size * 2) + 1, max_id=message_id + size
     ):
         result.append(message)
     return result

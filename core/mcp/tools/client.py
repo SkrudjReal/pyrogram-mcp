@@ -49,6 +49,8 @@ def register(mcp: FastMCP) -> None:
 
         Lifecycle and authentication methods are excluded. Prefer named tools for common
         operations; params must match the described signature.
+        Async generators return at most 100 items, even with limit=0; this is
+        a page, not a complete export. Continue using the method's cursor.
         """
         return await safe(
             "client_call",

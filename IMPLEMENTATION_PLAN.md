@@ -174,6 +174,9 @@ keeps one long-lived app-server process and one durable thread id in
 
 ### Этап 2 — сообщения и поиск
 
+Поиск поддерживает серверный from_user и min_id/max_id; история преобразует
+MCP offset_id в Kurigram max_id (offset_id-1), исключая повтор первой страницы.
+
 - [x] send/reply/edit/delete.
 - [x] forward/copy и mark as read.
 - [x] ограниченная pagination и `get_message_context`/`get_chat_context`.

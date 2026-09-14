@@ -5,40 +5,46 @@ from pyrogram.types import Message
 
 from core.service import codex
 from core.settings import logger
+from core.telegram.formatting import markdown_to_telegram_html, telegram_html_chunks
 
 
 MAX_TELEGRAM_TEXT = 3900
 
 
 def _chunks(text: str) -> list[str]:
-    return [text[index : index + MAX_TELEGRAM_TEXT] for index in range(0, len(text), MAX_TELEGRAM_TEXT)]
+    return telegram_html_chunks(text, MAX_TELEGRAM_TEXT)
 
 
 async def _reply(message: Message, text: str) -> None:
+    await _reply_html(message, markdown_to_telegram_html(text))
+
+
+async def _reply_html(message: Message, text: str) -> None:
     for chunk in _chunks(text) or [""]:
-        await message.reply_text(chunk, parse_mode=enums.ParseMode.DISABLED)
+        await message.reply_text(chunk, parse_mode=enums.ParseMode.HTML)
 
 
 async def _finish(status: Message, message: Message, text: str) -> None:
-    chunks = _chunks(text) or [""]
+    formatted = markdown_to_telegram_html(text)
+    chunks = _chunks(formatted) or [""]
     try:
-        await status.edit_text(chunks[0], parse_mode=enums.ParseMode.DISABLED)
+        await status.edit_text(chunks[0], parse_mode=enums.ParseMode.HTML)
     except Exception:
         logger.exception("Failed to edit Codex status message")
-        await _reply(message, text)
+        await _reply_html(message, formatted)
         return
     for chunk in chunks[1:]:
-        await message.reply_text(chunk, parse_mode=enums.ParseMode.DISABLED)
+        await message.reply_text(chunk, parse_mode=enums.ParseMode.HTML)
 
 
 async def ask_codex(app: Client, msg: Message) -> None:
     prompt = (msg.text or "").partition(" ")[2].strip()
     if not prompt:
-        await _reply(msg, "Использование: ам <текст запроса>")
+        await _reply(msg, "Использование: <code>ам текст запроса</code>")
         return
     status = await msg.reply_text(
         "⏳ Codex обрабатывает запрос…",
-        parse_mode=enums.ParseMode.DISABLED,
+        parse_mode=enums.ParseMode.HTML,
     )
     try:
         result = await codex.ask(prompt)
@@ -89,7 +95,7 @@ async def model_command(app: Client, msg: Message) -> None:
     if codex.current_model() not in listed:
         current_suffix = f" [{codex.current_reasoning()}]"
         lines.append(f"{codex.current_model()} — текущая локальная модель{current_suffix}")
-    lines.append("\nВыбор: .модель <slug>")
+    lines.append("\nВыбор: <code>.модель model-slug</code>")
     await _reply(msg, "\n".join(lines))
 
 
@@ -124,5 +130,5 @@ async def speed_command(app: Client, msg: Message) -> None:
         msg,
         f"Скорость Codex: {codex.current_speed()}\n"
         "Доступно: normal (обычная) и fast (быстрая, приоритетная).\n"
-        "Выбор: .скорость <normal|fast>",
+        "Выбор: <code>.скорость normal</code> или <code>.скорость fast</code>",
     )

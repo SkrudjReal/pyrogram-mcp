@@ -14,6 +14,8 @@ from core.settings import Settings, logger
 MAX_PROMPT_LENGTH = 12_000
 MAX_OUTPUT_LENGTH = 200_000
 MAX_MODEL_CATALOG_LENGTH = 2_000_000
+CODEX_STREAM_LIMIT = 8 * 1024 * 1024
+MAX_RPC_FRAME = 128 * 1024 * 1024
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 REASONING_DESCRIPTIONS = {
     "low": "быстрый ответ с облегчённым рассуждением",
@@ -38,19 +40,7 @@ SPEED_ALIASES = {
     "1.5x": "priority",
 }
 SPEED_LABELS = {"default": "normal", "priority": "fast"}
-DEVELOPER_INSTRUCTIONS = (
-    "Ты отвечаешь владельцу через Telegram-команду «ам». "
-    "Каждое сообщение пользователя — это прямое обращение к тебе, а не команда "
-    "переслать текст в Telegram. Например, на «ам привет» просто ответь "
-    "приветствием и не вызывай send_message. "
-    "Используй MCP-сервер pyrogram_mcp только когда сам запрос явно просит "
-    "прочитать, найти или изменить данные Telegram. Вызванный через «ам» запрос "
-    "владельца уже является разрешением на такое действие: не запрашивай отдельное "
-    "подтверждение. Не используй shell для Telegram-действий. Если владелец "
-    "просит показать команды или помощь, сначала обратись к файлу COMMANDS.md "
-    "в корне проекта и отправь актуальный список из него. Отвечай по-русски "
-    "кратко и сообщай фактический результат."
-)
+CODEX_PROMPT_PATH = Path("core/prompts/codex.md")
 
 
 class CodexError(RuntimeError):
@@ -68,7 +58,7 @@ class _State:
     model: str = "gpt-5.6-luna"
     reasoning_effort: str = "xhigh"
     service_tier: str = "default"
-    timeout: int = 180
+    timeout: int = 0
     mcp_url: str = "http://127.0.0.1:8000/mcp"
     mcp_transport: str = "streamable-http"
     workdir: Path = field(default_factory=Path.cwd)
@@ -96,7 +86,7 @@ def configure(settings: Settings) -> None:
     _state.model = settings.codex.model
     _state.reasoning_effort = settings.codex.reasoning_effort
     _state.service_tier = settings.codex.service_tier
-    _state.timeout = max(10, settings.codex.timeout)
+    _state.timeout = max(0, settings.codex.timeout)
     _state.mcp_url = settings.codex.mcp_url
     _state.mcp_transport = settings.mcp.transport
     _state.workdir = settings.paths.project_root
@@ -115,6 +105,17 @@ def current_reasoning() -> str:
 
 def current_speed() -> str:
     return SPEED_LABELS[_state.service_tier]
+
+
+def _developer_instructions() -> str:
+    prompt_path = _state.workdir / CODEX_PROMPT_PATH
+    try:
+        instructions = prompt_path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise CodexError("Не удалось прочитать файл инструкций Codex: codex.md") from exc
+    if not instructions:
+        raise CodexError("Файл инструкций Codex пуст: codex.md")
+    return instructions
 
 
 def set_speed(speed: str) -> str:
@@ -270,11 +271,27 @@ async def _fail_pending(error: CodexError) -> None:
     _state.pending.clear()
 
 
+async def _stream_lines(stream: asyncio.StreamReader):
+    """Read JSONL independently of StreamReader's readline limit."""
+    pending = bytearray()
+    while chunk := await stream.read(64 * 1024):
+        parts = chunk.split(b"\n")
+        for index, part in enumerate(parts):
+            if len(pending) + len(part) > MAX_RPC_FRAME:
+                raise CodexError("Ответ Codex превышает лимит 128 MiB; сессия сохранена.")
+            pending.extend(part)
+            if index < len(parts) - 1:
+                yield bytes(pending)
+                pending.clear()
+    if pending:
+        yield bytes(pending)
+
+
 async def _reader_loop(process: asyncio.subprocess.Process) -> None:
     assert process.stdout is not None
     error = CodexError("Соединение с Codex app-server закрыто.")
     try:
-        while line := await process.stdout.readline():
+        async for line in _stream_lines(process.stdout):
             try:
                 payload = json.loads(line)
             except json.JSONDecodeError:
@@ -293,6 +310,9 @@ async def _reader_loop(process: asyncio.subprocess.Process) -> None:
                 await _state.events.put(payload)
     except asyncio.CancelledError:
         raise
+    except CodexError as exc:
+        error = exc
+        logger.error("%s", exc)
     except Exception:
         logger.exception("Codex app-server reader failed")
     finally:
@@ -303,7 +323,7 @@ async def _reader_loop(process: asyncio.subprocess.Process) -> None:
 async def _stderr_loop(process: asyncio.subprocess.Process) -> None:
     assert process.stderr is not None
     try:
-        while line := await process.stderr.readline():
+        async for line in _stream_lines(process.stderr):
             logger.debug("codex app-server: %s", line.decode(errors="replace").rstrip())
     except asyncio.CancelledError:
         raise
@@ -357,7 +377,7 @@ def _thread_params() -> dict[str, Any]:
         "model": _state.model,
         "config": {"model_reasoning_effort": _state.reasoning_effort},
         "serviceTier": _state.service_tier,
-        "developerInstructions": DEVELOPER_INSTRUCTIONS,
+        "developerInstructions": _developer_instructions(),
         "approvalPolicy": APPROVAL_POLICY,
         "approvalsReviewer": APPROVALS_REVIEWER,
         "sandbox": "workspace-write",
@@ -442,6 +462,7 @@ async def start() -> None:
                 stderr=asyncio.subprocess.PIPE,
                 cwd=_state.workdir,
                 env=_codex_env(),
+                limit=CODEX_STREAM_LIMIT,
             )
             process = _state.process
             _state.reader_task = asyncio.create_task(_reader_loop(process))
@@ -469,10 +490,13 @@ async def start() -> None:
                     )
                 except CodexError as exc:
                     logger.warning("Saved Codex thread cannot be resumed: %s", exc)
+                    raise
                 else:
                     thread = result.get("thread")
                     if isinstance(thread, dict) and isinstance(thread.get("id"), str):
                         _state.thread_id = thread["id"]
+                    else:
+                        raise CodexError("Codex не восстановил сохранённый thread; новая сессия не создана.")
 
             if not _state.thread_id:
                 result = await _rpc("thread/start", {**_thread_params(), "ephemeral": False})
@@ -533,20 +557,23 @@ async def _interrupt(thread_id: str, turn_id: str) -> None:
 
 
 async def _wait_for_turn(thread_id: str, turn_id: str) -> str:
-    deadline = asyncio.get_running_loop().time() + _state.timeout
+    deadline = asyncio.get_running_loop().time() + _state.timeout if _state.timeout else None
     deltas: dict[str, list[str]] = {}
     message_order: list[str] = []
     completed_messages: dict[str, tuple[str | None, str]] = {}
     while True:
-        remaining = deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
+        remaining = deadline - asyncio.get_running_loop().time() if deadline else None
+        if remaining is not None and remaining <= 0:
             await _interrupt(thread_id, turn_id)
             raise CodexError("Codex не ответил вовремя.")
         try:
-            event = await asyncio.wait_for(_state.events.get(), timeout=remaining)
-        except asyncio.TimeoutError as exc:
-            await _interrupt(thread_id, turn_id)
-            raise CodexError("Codex не ответил вовремя.") from exc
+            event = await asyncio.wait_for(
+                _state.events.get(), timeout=min(remaining, 1) if remaining is not None else 1
+            )
+        except asyncio.TimeoutError:
+            if not _is_ready():
+                raise CodexError("Соединение с Codex app-server закрыто.")
+            continue
         method = event.get("method")
         params = event.get("params")
         if not isinstance(params, dict):
@@ -554,6 +581,9 @@ async def _wait_for_turn(thread_id: str, turn_id: str) -> str:
         if params.get("threadId") != thread_id:
             continue
         if params.get("turnId") not in (None, turn_id):
+            continue
+        event_turn = params.get("turn")
+        if isinstance(event_turn, dict) and event_turn.get("id") != turn_id:
             continue
         if method == "item/agentMessage/delta":
             item_id = params.get("itemId")

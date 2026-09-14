@@ -174,12 +174,16 @@ CODEX_BIN=codex
 CODEX_MODEL=gpt-5.6-luna
 CODEX_REASONING_EFFORT=xhigh
 CODEX_SERVICE_TIER=default
-CODEX_TIMEOUT=180
+CODEX_TIMEOUT=0
 ```
 
 ---
 
 ## 💬 Telegram Commands
+
+`CODEX_TIMEOUT=0` lets long exports finish without a total turn deadline.
+A positive value sets a total timeout in seconds. Requests remain serialized;
+while a request runs, another `ам` reports that the previous request is busy.
 
 > [!IMPORTANT]
 > All userbot commands are strictly **owner-only** (`filters.me`) and case-insensitive.
@@ -188,13 +192,19 @@ CODEX_TIMEOUT=180
 | :--- | :--- | :--- |
 | `пинг` | Verifies userbot responsiveness | `пинг` |
 | `.модель` | Lists available Codex models and reasoning levels | `.модель` |
-| `.модель <slug>` | Switches active Codex model | `.модель gpt-5.6-sol` |
+| `.модель [model-slug]` | Switches active Codex model | `.модель gpt-5.6-sol` |
 | `.мышление` / `/reasoning` | Shows current model and active reasoning effort | `.мышление` |
 | `.скорость` | Displays current Codex service tier | `.скорость` |
-| `.скорость <normal\|fast>` | Switches service tier (`обычно`, `быстро`, `1.5x`) | `.скорость fast` |
-| `ам <запрос>` | Sends prompt to persistent Codex agent | `ам Покажи последние 20 сообщений из чата <chat_id>` |
+| `.скорость [normal\|fast]` | Switches service tier (`обычно`, `быстро`, `1.5x`) | `.скорость fast` |
+| `ам [запрос]` | Sends prompt to persistent Codex agent | `ам Покажи последние 20 сообщений из чата [chat_id]` |
 
 For complete usage guides and command behavior, see [`COMMANDS.md`](COMMANDS.md).
+Codex response rules and Telegram HTML formatting live in
+[`core/prompts/codex.md`](core/prompts/codex.md).
+Codex replies are normalized from Markdown to Telegram HTML before delivery.
+Message search supports server-side `from_user` filtering and exclusive
+`min_id`/`max_id` pagination. History `offset_id` is an exclusive older-page
+cursor. Batch known message IDs instead of fetching them individually.
 
 ---
 

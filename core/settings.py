@@ -116,7 +116,7 @@ def get_settings(path: str | Path | None = None) -> Settings:
             model=env.str("CODEX_MODEL", default="gpt-5.6-luna"),
             reasoning_effort=env.str("CODEX_REASONING_EFFORT", default="xhigh"),
             service_tier=service_tier,
-            timeout=env.int("CODEX_TIMEOUT", default=180),
+            timeout=env.int("CODEX_TIMEOUT", default=0),
             mcp_url=env.str(
                 "CODEX_MCP_URL",
                 default=(
